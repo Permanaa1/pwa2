@@ -1,30 +1,43 @@
-import { useState } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
+import { Loader } from 'lucide-react'
+import { archiveGun } from './utils/archiveStorage.js'
+import { invalidateGunsCache } from './hooks/useGuns.js'
 import Header from './components/Header.jsx'
 import Footer from './components/Footer.jsx'
-import Catalog from './pages/Catalog.jsx'
-import FavoritesPage from './pages/FavoritesPage.jsx'
-import ProfilePage from './pages/ProfilePage.jsx'
-import CreateGunPage from './pages/CreateGunPage.jsx'
-import EditGunPage from './pages/EditGunPage.jsx'
-import GunDetail from './components/gun/GunDetail.jsx'
-import About from './pages/About.jsx'
-import Contact from './pages/Contact.jsx'
 import PWABadge from './components/PWABadge.jsx'
 import ConfirmModal from './components/modals/ConfirmModal.jsx'
 import SplashScreen from './components/common/SplashScreen.jsx'
 import gunService from './services/gunService.js'
 import './App.css'
 
+const Catalog = lazy(() => import('./pages/Catalog.jsx'))
+const FavoritesPage = lazy(() => import('./pages/FavoritesPage.jsx'))
+const ProfilePage = lazy(() => import('./pages/ProfilePage.jsx'))
+const CreateGunPage = lazy(() => import('./pages/CreateGunPage.jsx'))
+const EditGunPage = lazy(() => import('./pages/EditGunPage.jsx'))
+const GunDetail = lazy(() => import('./components/gun/GunDetail.jsx'))
+const About = lazy(() => import('./pages/About.jsx'))
+const Contact = lazy(() => import('./pages/Contact.jsx'))
+
 function App() {
   const [showSplash, setShowSplash] = useState(true)
   const [tab, setTab] = useState('Catalog')
-  const [mode, setMode] = useState('list') // 'list' | 'create' | 'edit' | 'detail'
+  const [mode, setMode] = useState('list')
   const [selectedGun, setSelectedGun] = useState(null)
   const [editingGun, setEditingGun] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
 
-  // Unified navigation handler
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedId = params.get('id');
+    if (sharedId) {
+      setShowSplash(false);
+      setSelectedGun({ id: sharedId });
+      setMode('detail');
+    }
+  }, []);
+
   const handleNavigate = (target, payload) => {
     if (target === 'Create') {
       setMode('create')
@@ -38,7 +51,6 @@ function App() {
       setMode('detail')
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } else {
-      // Tab change
       setTab(target)
       setMode('list')
       setSelectedGun(null)
@@ -66,82 +78,88 @@ function App() {
       />
 
       <main className="main">
-        {/* Sub-page views */}
-        {mode === 'create' && (
-          <CreateGunPage
-            onBack={handleBackToList}
-            onSuccess={() => {
-              handleBackToList()
-              setTab('Catalog')
-            }}
-          />
-        )}
+        {/* 2. BUNGKUS SELURUH KONTEN DI DALAM MAIN DENGAN SUSPENSE */}
+        <Suspense fallback={
+          <div className="state-box" style={{ marginTop: '10vh' }}>
+            <Loader className="spin" size={32} />
+            <p>Memuat antarmuka...</p>
+          </div>
+        }>
+          {/* Sub-page views */}
+          {mode === 'create' && (
+            <CreateGunPage
+              onBack={handleBackToList}
+              onSuccess={() => {
+                handleBackToList()
+                setTab('Catalog')
+              }}
+            />
+          )}
 
-        {mode === 'edit' && (
-          <EditGunPage
-            gun={editingGun}
-            gunId={editingGun?.id}
-            onBack={handleBackToList}
-            onSuccess={() => {
-              handleBackToList()
-              setTab('Catalog')
-            }}
-          />
-        )}
+          {mode === 'edit' && (
+            <EditGunPage
+              gun={editingGun}
+              gunId={editingGun?.id}
+              onBack={handleBackToList}
+              onSuccess={() => {
+                handleBackToList()
+                setTab('Catalog')
+              }}
+            />
+          )}
 
-        {mode === 'detail' && selectedGun && (
-          <GunDetail
-            gun={selectedGun}
-            onBack={handleBackToList}
-            onEdit={(g) => handleNavigate('Edit', g)}
-            onDelete={(g) => setDeleteTarget(g)}
-          />
-        )}
+          {mode === 'detail' && selectedGun && (
+            <GunDetail
+              gun={selectedGun}
+              onBack={handleBackToList}
+              onEdit={(g) => handleNavigate('Edit', g)}
+              onDelete={(g) => setDeleteTarget(g)}
+            />
+          )}
 
-        {/* Top-level Tabs */}
-        {mode === 'list' && (
-          <>
-            {tab === 'Catalog' && (
-              <Catalog
-                onNavigate={(destination, payload) => handleNavigate(destination, payload)}
-              />
-            )}
-            {tab === 'Favorites' && (
-              <FavoritesPage
-                onSelectGun={(g) => handleNavigate('Detail', g)}
-                onNavigateCatalog={() => setTab('Catalog')}
-              />
-            )}
-            {tab === 'Profile' && (
-              <ProfilePage onReplaySplash={() => setShowSplash(true)} />
-            )}
-            {tab === 'About' && <About />}
-            {tab === 'Contact' && <Contact />}
-          </>
-        )}
+          {/* Top-level Tabs */}
+          {mode === 'list' && (
+            <>
+              {tab === 'Catalog' && (
+                <Catalog
+                  onNavigate={(destination, payload) => handleNavigate(destination, payload)}
+                />
+              )}
+              {tab === 'Favorites' && (
+                <FavoritesPage
+                  onSelectGun={(g) => handleNavigate('Detail', g)}
+                  onNavigateCatalog={() => setTab('Catalog')}
+                />
+              )}
+              {tab === 'Profile' && (
+                <ProfilePage
+                  onReplaySplash={() => setShowSplash(true)}
+                  onNavigate={(destination, payload) => handleNavigate(destination, payload)}
+                />
+              )}
+              {tab === 'About' && <About />}
+              {tab === 'Contact' && <Contact />}
+            </>
+          )}
+        </Suspense>
       </main>
 
-      {/* Global Delete Confirmation */}
+      {/* Global Archive (Soft Delete) Confirmation */}
       <ConfirmModal
         open={Boolean(deleteTarget)}
-        title="Delete Hardware Record"
-        message={`Are you sure you want to delete "${deleteTarget?.name}"? This action cannot be undone.`}
-        confirmLabel="Delete"
-        danger
+        title="Archive Hardware Record"
+        message={`Move "${deleteTarget?.name}" to the archive? You can restore or permanently delete it later from your Profile page.`}
+        confirmLabel="Move to Archive"
         loading={deleting}
-        onConfirm={async () => {
+        onConfirm={() => {
           if (!deleteTarget) return
-          try {
-            setDeleting(true)
-            await gunService.deleteGun(deleteTarget.id)
-            setDeleteTarget(null)
-            handleBackToList()
-            setTab('Catalog')
-          } catch (err) {
-            alert(err.message || 'Failed to delete record.')
-          } finally {
-            setDeleting(false)
-          }
+          setDeleting(true)
+          archiveGun(deleteTarget)
+          invalidateGunsCache()
+          setDeleteTarget(null)
+          setDeleting(false)
+          handleBackToList()
+          setTab('Catalog')
         }}
         onCancel={() => setDeleteTarget(null)}
       />

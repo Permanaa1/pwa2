@@ -2,7 +2,6 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [
     react(),
@@ -24,7 +23,42 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,jpg,jpeg,webp,webmanifest}'],
+        runtimeCaching: [
+          {
+            // Caching untuk gambar (lokal maupun eksternal/Supabase Storage)
+            urlPattern: ({ request, url }) =>
+              request.destination === 'image' ||
+              /\.(?:png|jpg|jpeg|svg|gif|webp)$/i.test(url.pathname),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'armory-images-cache',
+              expiration: {
+                maxEntries: 60,
+                maxAgeSeconds: 30 * 24 * 60 * 60, // Simpan 30 hari
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+          {
+            // Caching untuk query data REST API (Supabase / Backend)
+            urlPattern: ({ url }) =>
+              url.origin.includes('supabase.co') || url.pathname.includes('/rest/v1/'),
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'armory-api-query-cache',
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 5 * 60, // Simpan 5 menit
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+        ],
       },
     }),
   ],

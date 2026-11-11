@@ -1,5 +1,94 @@
 import { apiClient, IS_SUPABASE } from '../config/api'
 
+const MULTI_IMG_STORAGE_KEY = 'bore_barrel_multi_images'
+const IMG_SPEC_PREFIX = '__IMAGES__:'
+
+const getMultiImageMap = () => {
+  try {
+    const raw = localStorage.getItem(MULTI_IMG_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+const saveMultiImagesLocal = (id, name, images) => {
+  if (!Array.isArray(images) || images.length === 0) return
+  try {
+    const map = getMultiImageMap()
+    if (id !== undefined && id !== null) map[String(id)] = images
+    if (name) map[String(name).toLowerCase()] = images
+    localStorage.setItem(MULTI_IMG_STORAGE_KEY, JSON.stringify(map))
+  } catch {
+    // Abaikan jika storage penuh
+  }
+}
+
+const loadMultiImagesLocal = (id, name) => {
+  const map = getMultiImageMap()
+  if (id !== undefined && id !== null && Array.isArray(map[String(id)])) {
+    return map[String(id)]
+  }
+  if (name && Array.isArray(map[String(name).toLowerCase()])) {
+    return map[String(name).toLowerCase()]
+  }
+  return null
+}
+
+// Helper untuk mengecek apakah suatu string/spec adalah data gambar tersembunyi
+const isEncodedImageSpec = (strOrObj) => {
+  if (!strOrObj) return false
+  if (typeof strOrObj === 'string') {
+    const s = strOrObj.trim()
+    return (
+      s.startsWith('__IMAGES__') ||
+      s.startsWith('_IMAGES__') ||
+      s.startsWith('__IMG__') ||
+      s.startsWith('["data:image') ||
+      s.startsWith('["http') ||
+      s.startsWith('["/guns/')
+    )
+  }
+  if (typeof strOrObj === 'object') {
+    const name = String(strOrObj.name || '').trim()
+    const qty = String(strOrObj.quantity || '').trim()
+    return (
+      name.includes('IMAGES__') ||
+      name.includes('__IMG__') ||
+      qty.startsWith('["data:image') ||
+      qty.startsWith('data:image/')
+    )
+  }
+  return false
+}
+
+// Helper untuk mengekstrak array URL dari spec yang menyembunyikan gambar
+const extractImagesFromSpecItem = (strOrObj) => {
+  try {
+    let rawVal = ''
+    if (typeof strOrObj === 'string') {
+      const colonIdx = strOrObj.indexOf(':')
+      rawVal = colonIdx > -1 ? strOrObj.slice(colonIdx + 1).trim() : strOrObj.trim()
+    } else if (typeof strOrObj === 'object' && strOrObj !== null) {
+      rawVal = String(strOrObj.quantity || '').trim()
+    }
+
+    if (rawVal.startsWith('[')) {
+      const parsed = JSON.parse(rawVal)
+      if (Array.isArray(parsed)) return parsed.filter(Boolean)
+    } else if (
+      rawVal.startsWith('data:image') ||
+      rawVal.startsWith('http') ||
+      rawVal.startsWith('/')
+    ) {
+      return [rawVal]
+    }
+  } catch {
+    // Abaikan jika JSON parse gagal
+  }
+  return []
+}
+
 // ---------------------------------------------------------------------------
 // Normalizer — standardizes product shape whether received from Supabase
 // (public.products) or from the university API (/api/v1/recipes).
@@ -7,36 +96,122 @@ import { apiClient, IS_SUPABASE } from '../config/api'
 export const normalizeProduct = (item) => {
   if (!item) return null
 
-  // Resolve specifications from Supabase `specs` (text array) or API `ingredients`
-  let specsList = []
+  const specsList = []
+  let extractedSpecImages = []
+
+  // 1. Proses `item.specs` dan pisahkan data gambar dari spesifikasi asli
   if (Array.isArray(item.specs)) {
-    specsList = item.specs.map((s, idx) => {
+    item.specs.forEach((s, idx) => {
+      if (isEncodedImageSpec(s)) {
+        const found = extractImagesFromSpecItem(s)
+        extractedSpecImages.push(...found)
+        return
+      }
+
       if (typeof s === 'string') {
         const colonIndex = s.indexOf(':')
         if (colonIndex > -1) {
-          return {
-            id: `spec-${idx}`,
-            name: s.substring(0, colonIndex).trim(),
-            quantity: s.substring(colonIndex + 1).trim(),
+          const specName = s.substring(0, colonIndex).trim()
+          const specVal = s.substring(colonIndex + 1).trim()
+          if (isEncodedImageSpec({ name: specName, quantity: specVal })) {
+            extractedSpecImages.push(
+              ...extractImagesFromSpecItem({ name: specName, quantity: specVal }),
+            )
+            return
           }
+          specsList.push({
+            id: `spec-${idx}`,
+            name: specName,
+            quantity: specVal,
+          })
+        } else {
+          specsList.push({
+            id: `spec-${idx}`,
+            name: 'Specification',
+            quantity: s.trim(),
+          })
         }
-        return {
-          id: `spec-${idx}`,
-          name: 'Specification',
-          quantity: s.trim(),
-        }
+      } else if (s && typeof s === 'object') {
+        specsList.push(s)
       }
-      return s
     })
   } else if (Array.isArray(item.ingredients)) {
-    specsList = item.ingredients
+    item.ingredients.forEach((ing) => {
+      if (isEncodedImageSpec(ing)) {
+        extractedSpecImages.push(...extractImagesFromSpecItem(ing))
+      } else {
+        specsList.push(ing)
+      }
+    })
   }
 
-  // Resolve steps
+  // 2. Kumpulkan semua gambar (Multiple Images)
+  let imagesList = []
+
+  if (Array.isArray(item.images) && item.images.length > 0) {
+    imagesList = item.images.filter(Boolean)
+  } else if (typeof item.images === 'string' && item.images.trim()) {
+    try {
+      const parsed = JSON.parse(item.images)
+      if (Array.isArray(parsed)) imagesList = parsed.filter(Boolean)
+    } catch {
+      imagesList = item.images.split(',').map((s) => s.trim()).filter(Boolean)
+    }
+  }
+
+  // Jika `image_url` berupa JSON string array (misal `["url1","url2"]`)
+  let primaryUrlFromField = item.image_url || item.image || ''
+  if (
+    typeof primaryUrlFromField === 'string' &&
+    primaryUrlFromField.trim().startsWith('[')
+  ) {
+    try {
+      const parsed = JSON.parse(primaryUrlFromField)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (imagesList.length === 0) imagesList = parsed.filter(Boolean)
+        primaryUrlFromField = parsed[0] || '/guns/pistol.svg'
+      }
+    } catch {
+      // Abaikan
+    }
+  }
+
+  // Gunakan gambar hasil ekstraksi dari specs jika imagesList masih kosong
+  if (imagesList.length === 0 && extractedSpecImages.length > 0) {
+    imagesList = extractedSpecImages
+  }
+
+  // Cek juga di localStorage
+  const localSaved = loadMultiImagesLocal(item.id, item.name)
+  if (Array.isArray(localSaved) && localSaved.length > imagesList.length) {
+    imagesList = localSaved
+  }
+
+  // Fallback jika tetap kosong
+  if (imagesList.length === 0) {
+    imagesList = [primaryUrlFromField || '/guns/pistol.svg']
+  } else if (
+    primaryUrlFromField &&
+    !primaryUrlFromField.startsWith('[') &&
+    !imagesList.includes(primaryUrlFromField)
+  ) {
+    imagesList = [primaryUrlFromField, ...imagesList]
+  }
+
+  // Hilangkan duplikat
+  imagesList = Array.from(new Set(imagesList.filter(Boolean)))
+
+  saveMultiImagesLocal(item.id, item.name, imagesList)
+
   const stepsList =
     Array.isArray(item.steps) && item.steps.length > 0
       ? item.steps
-      : ['Verify firearm is completely unloaded and point in safe direction.', 'Inspect receiver and mechanism for maintenance.']
+      : [
+          'Verify firearm is completely unloaded and point in safe direction.',
+          'Inspect receiver and mechanism for maintenance.',
+        ]
+
+  const mainImage = imagesList[0] || '/guns/pistol.svg'
 
   return {
     ...item,
@@ -47,22 +222,15 @@ export const normalizeProduct = (item) => {
     caliber: item.caliber || 'Standard',
     price: Number(item.price ?? item.cook_time ?? 0),
     description: item.description || '',
-    image_url: item.image_url || item.image || '/guns/pistol.svg',
-    image: item.image_url || item.image || '/guns/pistol.svg',
+    image_url: mainImage,
+    image: mainImage,
+    images: imagesList,
     ingredients: specsList,
     steps: stepsList,
   }
 }
 
-// ---------------------------------------------------------------------------
-// GunService — wraps backend CRUD endpoints.
-// Supports both Supabase PostgREST table (/rest/v1/products) and
-// standard REST API (/api/v1/recipes).
-// ---------------------------------------------------------------------------
 class GunService {
-  /**
-   * Fetch a paginated, filterable list of products.
-   */
   async getGuns(params = {}) {
     if (IS_SUPABASE) {
       const queryParts = ['select=*']
@@ -101,16 +269,12 @@ class GunService {
       }
     }
 
-    // Fallback: university REST API
     const clean = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== '' && v != null),
     )
     return apiClient.get('/api/v1/recipes', { params: clean })
   }
 
-  /**
-   * Fetch a single product by ID.
-   */
   async getGunById(id) {
     if (IS_SUPABASE) {
       const data = await apiClient.get(`/rest/v1/products?id=eq.${id}&select=*`)
@@ -122,16 +286,21 @@ class GunService {
     return apiClient.get(`/api/v1/recipes/${id}`)
   }
 
-  /**
-   * Create a new product.
-   */
   async createGun(data) {
+    const imagesArray =
+      Array.isArray(data.images) && data.images.length > 0
+        ? data.images.filter(Boolean)
+        : [data.image_url || data.image || '/guns/pistol.svg']
+
     if (IS_SUPABASE) {
-      const specsArray = Array.isArray(data.ingredients)
-        ? data.ingredients.map((i) => `${i.name}: ${i.quantity}`)
-        : Array.isArray(data.specs)
-        ? data.specs
+      const cleanIngredients = Array.isArray(data.ingredients)
+        ? data.ingredients.filter((i) => !isEncodedImageSpec(i))
         : []
+
+      const baseSpecs = cleanIngredients.map((i) => `${i.name}: ${i.quantity}`)
+
+      // Simpan array JSON gambar pada 1 entri khusus di specs agar tersimpan di Supabase
+      const specsArray = [...baseSpecs, `${IMG_SPEC_PREFIX}${JSON.stringify(imagesArray)}`]
 
       const payload = {
         name: data.name,
@@ -140,28 +309,48 @@ class GunService {
         price: Number(data.price ?? data.cook_time ?? 0),
         description: data.description || '',
         specs: specsArray,
-        image_url: data.image_url || null,
+        image_url: imagesArray[0] || '/guns/pistol.svg',
       }
 
       const res = await apiClient.post('/rest/v1/products', payload, {
         headers: { Prefer: 'return=representation' },
       })
       const created = Array.isArray(res) ? res[0] : res
-      return { success: true, data: normalizeProduct(created) }
+      saveMultiImagesLocal(created?.id, data.name, imagesArray)
+
+      return {
+        success: true,
+        data: normalizeProduct({ ...created, images: imagesArray }),
+      }
     }
-    return apiClient.post('/api/v1/recipes', data)
+
+    const res = await apiClient.post('/api/v1/recipes', {
+      ...data,
+      image_url: imagesArray[0],
+      images: imagesArray,
+    })
+    saveMultiImagesLocal(res?.data?.id, data.name, imagesArray)
+    return res
   }
 
-  /**
-   * Update existing product.
-   */
   async updateGun(id, data) {
-    if (IS_SUPABASE) {
-      const specsArray = Array.isArray(data.ingredients)
-        ? data.ingredients.map((i) => `${i.name}: ${i.quantity}`)
-        : Array.isArray(data.specs)
-        ? data.specs
+    const imagesArray =
+      Array.isArray(data.images) && data.images.length > 0
+        ? data.images.filter(Boolean)
+        : data.image_url
+        ? [data.image_url]
         : undefined
+
+    if (IS_SUPABASE) {
+      const cleanIngredients = Array.isArray(data.ingredients)
+        ? data.ingredients.filter((i) => !isEncodedImageSpec(i))
+        : []
+
+      let specsArray = cleanIngredients.map((i) => `${i.name}: ${i.quantity}`)
+
+      if (imagesArray && imagesArray.length > 0) {
+        specsArray.push(`${IMG_SPEC_PREFIX}${JSON.stringify(imagesArray)}`)
+      }
 
       const payload = {
         updated_at: new Date().toISOString(),
@@ -173,21 +362,33 @@ class GunService {
         payload.price = Number(data.price ?? data.cook_time ?? 0)
       }
       if (data.description !== undefined) payload.description = data.description
-      if (specsArray !== undefined) payload.specs = specsArray
-      if (data.image_url !== undefined) payload.image_url = data.image_url
+      if (specsArray.length > 0) payload.specs = specsArray
+      if (imagesArray && imagesArray.length > 0) {
+        payload.image_url = imagesArray[0]
+      } else if (data.image_url !== undefined) {
+        payload.image_url = data.image_url
+      }
 
       const res = await apiClient.patch(`/rest/v1/products?id=eq.${id}`, payload, {
         headers: { Prefer: 'return=representation' },
       })
       const updated = Array.isArray(res) ? res[0] : res
-      return { success: true, data: normalizeProduct(updated) }
+      if (imagesArray) {
+        saveMultiImagesLocal(id, data.name || updated?.name, imagesArray)
+      }
+
+      return {
+        success: true,
+        data: normalizeProduct({
+          ...updated,
+          ...(imagesArray ? { images: imagesArray } : {}),
+        }),
+      }
     }
+
     return apiClient.put(`/api/v1/recipes/${id}`, data)
   }
 
-  /**
-   * Partial update (PATCH).
-   */
   async patchGun(id, data) {
     if (IS_SUPABASE) {
       return this.updateGun(id, data)
@@ -195,9 +396,6 @@ class GunService {
     return apiClient.patch(`/api/v1/recipes/${id}`, data)
   }
 
-  /**
-   * Delete product.
-   */
   async deleteGun(id) {
     if (IS_SUPABASE) {
       await apiClient.delete(`/rest/v1/products?id=eq.${id}`)

@@ -1,23 +1,6 @@
-// ---------------------------------------------------------------------------
-// draftStorage.js — auto-save / restore form drafts via localStorage.
-//
-// Drafts are keyed by a string id:
-//   'create'              → the Create form
-//   '<uuid>'              → the Edit form for a specific product
-//
-// Each draft is stored under  `gun_draft_<id>`  and its companion
-// timestamp under  `gun_draft_<id>_ts`.
-// ---------------------------------------------------------------------------
-
 const PREFIX = 'gun_draft_'
 const TS_SUFFIX = '_ts'
 
-/**
- * Persist a draft object.
- * @param {Object} draftData — arbitrary JSON-serializable form state
- * @param {string} draftId   — 'create' or a product UUID
- * @returns {boolean} true on success
- */
 export const saveDraft = (draftData, draftId = 'create') => {
   try {
     const key = `${PREFIX}${draftId}`
@@ -30,10 +13,6 @@ export const saveDraft = (draftData, draftId = 'create') => {
   }
 }
 
-/**
- * Load a previously saved draft.
- * @returns {Object|null}
- */
 export const loadDraft = (draftId = 'create') => {
   try {
     const raw = localStorage.getItem(`${PREFIX}${draftId}`)
@@ -43,9 +22,6 @@ export const loadDraft = (draftId = 'create') => {
   }
 }
 
-/**
- * Remove a draft and its timestamp from storage.
- */
 export const deleteDraft = (draftId = 'create') => {
   try {
     const key = `${PREFIX}${draftId}`
@@ -57,9 +33,6 @@ export const deleteDraft = (draftId = 'create') => {
   }
 }
 
-/**
- * Check whether a draft exists.
- */
 export const hasDraft = (draftId = 'create') => {
   try {
     return localStorage.getItem(`${PREFIX}${draftId}`) !== null
@@ -68,9 +41,6 @@ export const hasDraft = (draftId = 'create') => {
   }
 }
 
-/**
- * Return the ISO-8601 timestamp string of the last save, or null.
- */
 export const getDraftTimestamp = (draftId = 'create') => {
   try {
     return localStorage.getItem(`${PREFIX}${draftId}${TS_SUFFIX}`)
@@ -79,9 +49,6 @@ export const getDraftTimestamp = (draftId = 'create') => {
   }
 }
 
-/**
- * Human-readable "time ago" label for a draft timestamp.
- */
 export const formatDraftTime = (timestamp) => {
   if (!timestamp) return ''
   const diff = Date.now() - new Date(timestamp).getTime()
@@ -95,9 +62,6 @@ export const formatDraftTime = (timestamp) => {
   return new Date(timestamp).toLocaleDateString()
 }
 
-/**
- * Return all existing draft ids.
- */
 export const getAllDraftIds = () => {
   try {
     return Object.keys(localStorage)
@@ -108,9 +72,30 @@ export const getAllDraftIds = () => {
   }
 }
 
-/**
- * Remove every gun draft from storage.
- */
+export const getAllDrafts = () => {
+  try {
+    return getAllDraftIds()
+      .map((id) => {
+        const data = loadDraft(id)
+        const timestamp = getDraftTimestamp(id) || data?.savedAt
+        return {
+          draftId: id,
+          isCreate: id === 'create',
+          name: data?.formData?.name?.trim() || 'Untitled Hardware Draft',
+          type: data?.formData?.type || 'Pistol',
+          caliber: data?.formData?.caliber || '9mm',
+          price: data?.formData?.price ?? 0,
+          image: data?.uploadedImageUrl || data?.imagePreview || '/guns/pistol.svg',
+          timestamp,
+          raw: data,
+        }
+      })
+      .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
+  } catch {
+    return []
+  }
+}
+
 export const clearAllDrafts = () => {
   getAllDraftIds().forEach(deleteDraft)
 }

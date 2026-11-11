@@ -1,5 +1,6 @@
 import FavoriteButton from '../common/FavoriteButton'
 import { formatPrice, truncate } from '../../utils/helpers'
+import { Share2 } from 'lucide-react'
 
 /**
  * Product card used in the catalog grid.
@@ -15,6 +16,17 @@ export default function GunCard({ gun, onSelect, onEdit, onDelete }) {
   const category = gun.type || gun.category || '—'
   const caliber = gun.caliber || gun.difficulty || ''
   const price = gun.price ?? gun.cook_time ?? 0
+
+  const handleShare = async (e) => {
+      e.stopPropagation(); // Mencegah klik masuk ke detail
+      const shareUrl = `${window.location.origin}${window.location.pathname}?id=${gun.id || gun.name}`;
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        alert('Link katalog berhasil disalin!');
+      } catch (err) {
+        console.error('Failed to copy text: ', err);
+      }
+    }
 
   return (
     <li className="card">
@@ -49,6 +61,16 @@ export default function GunCard({ gun, onSelect, onEdit, onDelete }) {
 
       {/* Floating actions row */}
       <div className="card-actions">
+        <button 
+          type="button" 
+          className="card-act-btn" 
+          onClick={handleShare} 
+          aria-label="Share" 
+          title="Share Link"
+        >
+          <Share2 size={16} color="var(--steel)" />
+        </button>
+        
         <FavoriteButton gunId={gun.id || gun.name} />
 
         {onEdit && (

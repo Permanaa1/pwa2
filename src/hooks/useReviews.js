@@ -2,9 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import reviewService from '../services/reviewService'
 
 // ---------------------------------------------------------------------------
-// useReviews — fetch reviews for a specific product.
+// useReviews — fetch, update, and delete reviews for a specific product.
 // ---------------------------------------------------------------------------
-
 export function useReviews(gunId) {
   const [reviews, setReviews] = useState([])
   const [loading, setLoading] = useState(true)
@@ -18,9 +17,7 @@ export function useReviews(gunId) {
     try {
       setLoading(true)
       setError(null)
-
       const response = await reviewService.getReviews(gunId)
-
       if (response.success) {
         setReviews(response.data || [])
       } else {
@@ -38,13 +35,57 @@ export function useReviews(gunId) {
     fetchReviews()
   }, [fetchReviews])
 
-  return { reviews, loading, error, refetch: fetchReviews }
+  // Update ulasan
+  const updateReview = async (reviewId, updatedData) => {
+    try {
+      const res = await reviewService.updateReview(reviewId, updatedData)
+      if (res.success) {
+        await fetchReviews()
+        return true
+      }
+      return false
+    } catch {
+      // Fallback update state lokal jika server offline
+      setReviews((prev) =>
+        prev.map((r) =>
+          r.id === reviewId
+            ? { ...r, rating: Number(updatedData.rating), comment: updatedData.comment }
+            : r,
+        ),
+      )
+      return true
+    }
+  }
+
+  // Hapus ulasan
+  const deleteReview = async (reviewId) => {
+    try {
+      const res = await reviewService.deleteReview(reviewId)
+      if (res.success) {
+        await fetchReviews()
+        return true
+      }
+      return false
+    } catch {
+      // Fallback hapus dari state lokal jika server offline
+      setReviews((prev) => prev.filter((r) => r.id !== reviewId))
+      return true
+    }
+  }
+
+  return {
+    reviews,
+    loading,
+    error,
+    refetch: fetchReviews,
+    updateReview,
+    deleteReview,
+  }
 }
 
 // ---------------------------------------------------------------------------
 // useCreateReview — submit a new review for a product.
 // ---------------------------------------------------------------------------
-
 export function useCreateReview() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -55,9 +96,7 @@ export function useCreateReview() {
       setLoading(true)
       setError(null)
       setSuccess(false)
-
       const response = await reviewService.createReview(gunId, reviewData)
-
       if (response.success) {
         setSuccess(true)
         return response.data
